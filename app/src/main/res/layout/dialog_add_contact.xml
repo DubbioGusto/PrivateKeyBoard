@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Contact Name:"
+        android:textSize="14sp"
+        android:paddingBottom="4dp" />
+
+    <EditText
+        android:id="@+id/contact_name_input"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="e.g., Alice"
+        android:inputType="textPersonName"
+        android:paddingBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Public Key:"
+        android:textSize="14sp"
+        android:paddingBottom="4dp" />
+
+    <EditText
+        android:id="@+id/contact_public_key_input"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:hint="Paste public key here"
+        android:inputType="textMultiLine"
+        android:gravity="top"
+        android:fontFamily="monospace"
+        android:textSize="11sp" />
+
+    <Button
+        android:id="@+id/paste_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Paste from Clipboard"
+        android:textSize="12sp"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout>
