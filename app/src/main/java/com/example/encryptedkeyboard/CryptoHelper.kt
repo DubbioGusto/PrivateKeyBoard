@@ -1,5 +1,6 @@
 package com.example.encryptedkeyboard
 
+import android.annotation.SuppressLint
 import android.util.Base64
 import java.security.*
 import java.security.spec.PKCS8EncodedKeySpec
@@ -47,6 +48,7 @@ class CryptoHelper {
         return keyFactory.generatePrivate(spec)
     }
 
+    @SuppressLint("GetInstance")
     fun encrypt(plaintext: String, publicKeyString: String): String {
         val aesKey = generateAESKey()
 
@@ -73,6 +75,7 @@ class CryptoHelper {
         return Base64.encodeToString(combined, Base64.DEFAULT)
     }
 
+    @SuppressLint("GetInstance")
     fun decrypt(encryptedString: String, privateKeyString: String): String {
         val combined = Base64.decode(encryptedString, Base64.DEFAULT)
 

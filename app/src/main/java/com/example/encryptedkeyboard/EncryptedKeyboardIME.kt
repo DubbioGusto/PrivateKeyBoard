@@ -107,14 +107,16 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
     }
 
     private fun encryptAndSend() {
-        val plaintext = previewText.text.toString()
+        // Decode the obfuscated text from preview to get readable plaintext
+        val obfuscatedText = previewText.text.toString()
+        val plaintext = unicodeMapper.decode(obfuscatedText)
         val publicKey = selectedPublicKey ?: return
 
         try {
             val encrypted = cryptoHelper.encrypt(plaintext, publicKey)
             val formattedMessage = "-----BEGIN ENCRYPTED MESSAGE-----\n$encrypted\n-----END ENCRYPTED MESSAGE-----"
 
-            // Insert encrypted text into input field
+            // Insert encrypted text into input field (no obfuscation for encrypted output)
             currentInputConnection?.commitText(formattedMessage, 1)
 
             // Clear preview
@@ -169,12 +171,27 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
         val ic = currentInputConnection ?: return
 
         when (primaryCode) {
-            Keyboard.KEYCODE_DELETE -> ic.deleteSurroundingText(1, 0)
-            Keyboard.KEYCODE_DONE -> ic.sendDefaultEditorAction(true)
+            Keyboard.KEYCODE_DELETE -> {
+                // Delete from preview (obfuscated)
+                val currentText = previewText.text.toString()
+                if (currentText.isNotEmpty()) {
+                    previewText.setText(currentText.dropLast(1))
+                    previewText.setSelection(previewText.text.length)
+                }
+                // Delete from input field normally
+                ic.deleteSurroundingText(1, 0)
+            }
+            Keyboard.KEYCODE_DONE -> ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)
             Keyboard.KEYCODE_SHIFT -> handleShift()
             else -> {
-                val char = primaryCode.toChar()
-                ic.commitText(char.toString(), 1)
+                val standardChar = primaryCode.toChar()
+
+                // Add obfuscated character to preview
+                val obfuscatedChar = unicodeMapper.encode(standardChar)
+                previewText.append(obfuscatedChar.toString())
+
+                // Add normal character to input field
+                ic.commitText(standardChar.toString(), 1)
             }
         }
     }
