@@ -29,6 +29,7 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
     private val cryptoHelper = CryptoHelper()
     private val keyStorage by lazy { KeyStorage(this) }
     private val unicodeMapper = UnicodeMapper()
+    private val emojiEncoder = EmojiEncoder()
 
     override fun onCreateInputView(): View {
         val container = layoutInflater.inflate(R.layout.keyboard_layout, null) as LinearLayout
