@@ -5,6 +5,9 @@ import android.content.Context
 import android.inputmethodservice.InputMethodService
 import android.inputmethodservice.Keyboard
 import android.inputmethodservice.KeyboardView
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
@@ -15,7 +18,7 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
     private lateinit var keyboard: Keyboard
 
     private lateinit var toolbarView: View
-    private lateinit var previewText: EditText
+    private lateinit var previewText: TextView
     private lateinit var decryptedView: TextView
     private lateinit var selectedKeyText: TextView
     private lateinit var encryptButton: Button
@@ -23,13 +26,38 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
     private lateinit var selectKeyButton: Button
     private lateinit var clearButton: Button
     private lateinit var decryptPanel: LinearLayout
+    private lateinit var emojifyCheckbox: CheckBox
+    private lateinit var modeToggle: Button
 
     private var selectedPublicKey: String? = null
     private var selectedContactName: String? = null
     private val cryptoHelper = CryptoHelper()
     private val keyStorage by lazy { KeyStorage(this) }
+
+    // Unicode mapper for obfuscation
     private val unicodeMapper = UnicodeMapper()
+
+    // Emoji encoder
     private val emojiEncoder = EmojiEncoder()
+
+    // Mode: true = internal preview, false = direct to app
+    private var useInternalMode = true
+
+    // Internal buffer to store OBFUSCATED text
+    private val obfuscatedBuffer = StringBuilder()
+    private var cursorPosition = 0
+
+    // Handler for periodic rotation checks and preview updates
+    private val rotationHandler = Handler(Looper.getMainLooper())
+    private val rotationCheckRunnable = object : Runnable {
+        override fun run() {
+            unicodeMapper.checkAndRotate()
+            if (useInternalMode) {
+                updatePreviewDisplay()
+            }
+            rotationHandler.postDelayed(this, 1000)
+        }
+    }
 
     override fun onCreateInputView(): View {
         val container = layoutInflater.inflate(R.layout.keyboard_layout, null) as LinearLayout
@@ -44,6 +72,8 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
         selectKeyButton = container.findViewById(R.id.select_key_button)
         clearButton = container.findViewById(R.id.clear_button)
         decryptPanel = container.findViewById(R.id.decrypt_panel)
+        emojifyCheckbox = container.findViewById(R.id.emojify_checkbox)
+        modeToggle = container.findViewById(R.id.mode_toggle)
 
         // Initialize keyboard
         keyboardView = container.findViewById(R.id.keyboard_view)
@@ -52,19 +82,25 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
         keyboardView.setOnKeyboardActionListener(this)
 
         setupListeners()
+        updateModeUI()
+
+        // Start rotation checker
+        rotationHandler.post(rotationCheckRunnable)
 
         return container
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        rotationHandler.removeCallbacks(rotationCheckRunnable)
+    }
+
     private fun setupListeners() {
-        // Preview text changes
-        previewText.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: android.text.Editable?) {
-                encryptButton.isEnabled = !s.isNullOrEmpty() && selectedPublicKey != null
-            }
-        })
+        // Mode toggle button
+        modeToggle.setOnClickListener {
+            useInternalMode = !useInternalMode
+            updateModeUI()
+        }
 
         // Select key button
         selectKeyButton.setOnClickListener {
@@ -83,9 +119,43 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
 
         // Clear button
         clearButton.setOnClickListener {
-            previewText.text.clear()
+            obfuscatedBuffer.clear()
+            cursorPosition = 0
+            previewText.text = ""
             decryptPanel.visibility = View.GONE
+            encryptButton.isEnabled = false
         }
+    }
+
+    private fun updateModeUI() {
+        if (useInternalMode) {
+            modeToggle.text = "Mode: Internal"
+            previewText.visibility = View.VISIBLE
+            encryptButton.visibility = View.VISIBLE
+            selectKeyButton.visibility = View.VISIBLE
+            emojifyCheckbox.visibility = View.VISIBLE
+            selectedKeyText.visibility = View.VISIBLE
+        } else {
+            modeToggle.text = "Mode: Direct"
+            previewText.visibility = View.GONE
+            encryptButton.visibility = View.GONE
+            selectKeyButton.visibility = View.GONE
+            emojifyCheckbox.visibility = View.GONE
+            selectedKeyText.visibility = View.GONE
+        }
+    }
+
+    /**
+     * Update preview to show current word as readable
+     */
+    private fun updatePreviewDisplay() {
+        if (!useInternalMode || obfuscatedBuffer.isEmpty()) return
+
+        val obfuscatedText = obfuscatedBuffer.toString()
+        val displayText = unicodeMapper.getDisplayText(obfuscatedText, cursorPosition)
+
+        previewText.text = displayText
+        encryptButton.isEnabled = obfuscatedBuffer.isNotEmpty() && selectedPublicKey != null
     }
 
     private fun showKeySelector() {
@@ -96,35 +166,59 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
         }
 
         val names = contacts.map { it.name }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Select Recipient")
-            .setItems(names) { _, which ->
-                selectedContactName = contacts[which].name
-                selectedPublicKey = contacts[which].publicKey
-                selectedKeyText.text = "To: $selectedContactName"
-                encryptButton.isEnabled = previewText.text.isNotEmpty()
-            }
-            .show()
+
+        try {
+            val builder = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+            builder.setTitle("Select Recipient")
+                .setItems(names) { dialog, which ->
+                    selectedContactName = contacts[which].name
+                    selectedPublicKey = contacts[which].publicKey
+                    selectedKeyText.text = "To: $selectedContactName"
+                    encryptButton.isEnabled = obfuscatedBuffer.isNotEmpty()
+                    dialog.dismiss()
+                }
+                .setNegativeButton("Cancel") { dialog, _ ->
+                    dialog.dismiss()
+                }
+
+            val dialog = builder.create()
+            dialog.window?.setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
+            dialog.show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error opening dialog: ${e.message}", Toast.LENGTH_LONG).show()
+            Log.e("EncryptedKeyboard", "Error showing dialog", e)
+        }
     }
 
     private fun encryptAndSend() {
-        // Decode the obfuscated text from preview to get readable plaintext
-        val obfuscatedText = previewText.text.toString()
+        if (!useInternalMode) return
+
+        val obfuscatedText = obfuscatedBuffer.toString()
         val plaintext = unicodeMapper.decode(obfuscatedText)
         val publicKey = selectedPublicKey ?: return
 
         try {
             val encrypted = cryptoHelper.encrypt(plaintext, publicKey)
-            val formattedMessage = "-----BEGIN ENCRYPTED MESSAGE-----\n$encrypted\n-----END ENCRYPTED MESSAGE-----"
 
-            // Insert encrypted text into input field (no obfuscation for encrypted output)
-            currentInputConnection?.commitText(formattedMessage, 1)
+            val finalMessage = if (emojifyCheckbox.isChecked) {
+                emojiEncoder.encodeToEmoji(encrypted)
+            } else {
+                encrypted
+            }
 
-            // Clear preview
-            previewText.text.clear()
-            Toast.makeText(this, "Message encrypted and sent!", Toast.LENGTH_SHORT).show()
+            currentInputConnection?.commitText(finalMessage, 1)
+
+            // Clear buffer
+            obfuscatedBuffer.clear()
+            cursorPosition = 0
+            previewText.text = ""
+            encryptButton.isEnabled = false
+
+            val messageType = if (emojifyCheckbox.isChecked) "emojified" else "encrypted"
+            Toast.makeText(this, "Message $messageType and sent!", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Encryption failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            Log.e("EncryptedKeyboard", "Encryption error", e)
         }
     }
 
@@ -139,18 +233,6 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
 
         val clipText = clipData.getItemAt(0).text?.toString() ?: ""
 
-        // Extract encrypted message
-        val encryptedMatch = Regex("-----BEGIN ENCRYPTED MESSAGE-----\\s*(.+?)\\s*-----END ENCRYPTED MESSAGE-----", RegexOption.DOT_MATCHES_ALL)
-            .find(clipText)
-
-        if (encryptedMatch == null) {
-            Toast.makeText(this, "No encrypted message found in clipboard", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val encryptedText = encryptedMatch.groupValues[1].trim()
-
-        // Get private key
         val privateKey = keyStorage.getPrivateKey()
         if (privateKey == null) {
             Toast.makeText(this, "No private key found. Generate one in Key Management.", Toast.LENGTH_SHORT).show()
@@ -158,41 +240,63 @@ class EncryptedKeyboardIME : InputMethodService(), KeyboardView.OnKeyboardAction
         }
 
         try {
+            val encryptedText = if (emojiEncoder.isEmojiEncoded(clipText)) {
+                val decoded = emojiEncoder.decodeFromEmoji(clipText)
+                if (decoded == null) {
+                    Toast.makeText(this, "Invalid emoji-encoded message", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                decoded
+            } else {
+                clipText.trim()
+            }
+
             val decrypted = cryptoHelper.decrypt(encryptedText, privateKey)
             decryptedView.text = decrypted
             decryptPanel.visibility = View.VISIBLE
             Toast.makeText(this, "Message decrypted!", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Decryption failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            Log.e("EncryptedKeyboard", "Decryption error", e)
         }
     }
 
-    // Keyboard action listeners
     override fun onKey(primaryCode: Int, keyCodes: IntArray?) {
         val ic = currentInputConnection ?: return
 
         when (primaryCode) {
             Keyboard.KEYCODE_DELETE -> {
-                // Delete from preview (obfuscated)
-                val currentText = previewText.text.toString()
-                if (currentText.isNotEmpty()) {
-                    previewText.setText(currentText.dropLast(1))
-                    previewText.setSelection(previewText.text.length)
+                if (useInternalMode) {
+                    // Delete from buffer
+                    if (cursorPosition > 0 && obfuscatedBuffer.isNotEmpty()) {
+                        obfuscatedBuffer.deleteCharAt(cursorPosition - 1)
+                        cursorPosition--
+                        updatePreviewDisplay()
+                    }
+                } else {
+                    // Delete from app field
+                    ic.deleteSurroundingText(1, 0)
                 }
-                // Delete from input field normally
-                ic.deleteSurroundingText(1, 0)
             }
-            Keyboard.KEYCODE_DONE -> ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)
+            Keyboard.KEYCODE_DONE -> {
+                ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)
+            }
             Keyboard.KEYCODE_SHIFT -> handleShift()
             else -> {
                 val standardChar = primaryCode.toChar()
 
-                // Add obfuscated character to preview
-                val obfuscatedChar = unicodeMapper.encode(standardChar)
-                previewText.append(obfuscatedChar.toString())
+                if (useInternalMode) {
+                    // Add obfuscated character to buffer
+                    val obfuscatedChar = unicodeMapper.encode(standardChar)
+                    obfuscatedBuffer.insert(cursorPosition, obfuscatedChar)
+                    cursorPosition++
 
-                // Add normal character to input field
-                ic.commitText(standardChar.toString(), 1)
+                    // Update display immediately
+                    updatePreviewDisplay()
+                } else {
+                    // Add normal character directly to app field
+                    ic.commitText(standardChar.toString(), 1)
+                }
             }
         }
     }
